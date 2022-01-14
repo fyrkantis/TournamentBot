@@ -46,7 +46,7 @@ guild_ids = [732240720487776356]
 async def createChannels(context):
 	guildId = context.guild_id
 	if guildId is None:
-		await ctx.send("Sorry, can't create channels in DMs.")
+		await context.send("Sorry, can't create channels in DMs.")
 		return
 	guild = None
 	for joinedGuild in client.guilds:
@@ -54,7 +54,7 @@ async def createChannels(context):
 			guild = joinedGuild
 			break
 	if guild is None:
-		await ctx.send("You need to invite Tournament Bot to create channels.\nInvite link: https://discord.com/api/oauth2/authorize?client_id=931495315834548244&permissions=285379664&scope=bot%20applications.commands")
+		await context.send("You need to invite Tournament Bot to create channels.\nInvite link: https://discord.com/api/oauth2/authorize?client_id=931495315834548244&permissions=285379664&scope=bot%20applications.commands")
 		return
 	
 	# Finds or creates a category named "tournament".
