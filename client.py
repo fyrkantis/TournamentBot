@@ -1,23 +1,38 @@
 # External Libraries
-from calendar import c
+from random import choice
 import os
+from sqlite3 import connect
 from dotenv import load_dotenv
 
-import discord
+from discord import Client, Color, PermissionOverwrite, errors
+from discord.utils import get
 from discord_slash import SlashCommand
 from discord_slash.utils.manage_commands import create_choice, create_option
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
-client = discord.Client()
+client = Client()
 
 tournaments = {}
+colors = {
+	"Cyan": Color.teal(),
+	"Green": Color.green(),
+	"Blue": Color.blue(),
+	"Purple": Color.purple(),
+	"Magenta": Color.magenta(),
+	"Yellow": Color.gold(),
+	"Orange": Color.orange(),
+	"Red": Color.red()
+}
 
 # Main classes.
 
 class Tournament():
-	def __init__(self, guildId, textId, voiceId):
+	def __init__(self, guildId, leaderRoleId, categoryId, infoId, textId, voiceId):
 		self.guildId = guildId
+		self.leaderRoleId = leaderRoleId
+		self.categoryId = categoryId
+		self.infoId = infoId
 		self.textId = textId
 		self.voiceId = voiceId
 
@@ -28,9 +43,8 @@ class Tournament():
 		return f"Tournament with {len(self.lobby)} players in lobby and {len(self.teams)} teams:\n{self.teams}"
 
 class Team():
-	def __init__(self, name, leader, roleId, textId, voiceId):
-		self.name = name
-		self.leader = leader
+	def __init__(self, leaderId, roleId, textId, voiceId):
+		self.leaderId = leaderId
 
 		self.roleId = roleId
 		textId = textId
@@ -39,7 +53,7 @@ class Team():
 		self.players = []
 	
 	def __str__(self):
-		return f"Team \"{self.name}\", {len(self.players)} players."
+		return f"Team containing {len(self.players)} players."
 	
 	def __repr__(self):
 		return str(self) + "\n"
@@ -107,29 +121,31 @@ def findGuildTournament(guildId, action = "do this", tournamentNone = False):
 			return None, f"You can't {action} because no tournament currently exists, use `/tournament create` to start one."
 	return guild, None # Returns the guild object, current global tournament variable (which should be by reference since objects are mutable), and a potential error message.
 
-# Looks for the channel/category name in existingList, creates one if it's missing, and returns it. Filter function can be used as an additional filter.
-async def findNameAsync(name, existingList, createFunctionAsync, filterFunction = None):
+# Looks for the channel/category name in existingList, creates one if it's missing, and returns it.
+# External input can be used to bypass if it already contains something. Filter function can be used as an additional filter.
+async def findOrCreateNameAsync(name, existingList, createFunctionAsync, externalInput = None, filterFunction = None, **createArgs):
+	if not externalInput is None: # TODO: Better parameter naming scheme.
+		return externalInput
 	for element in existingList:
 		if element.name.lower() == name.lower() and (filterFunction is None or filterFunction(element)):
 			return element
-	return await createFunctionAsync(name)
+	return await createFunctionAsync(name = name, **createArgs)
 
-# Looks for the many channel/category names in existingList, creates then if they're missing, and returns results in a list with the same order. Filter function can be used as an additional filter.
-async def findOrCreateNamesAsync(names, existingList, createFunctionAsync, filterFunction = None):
-	targets = dict.fromkeys(names) # Converts the list names to a dict with all values None.
-	for element in existingList:
-		anyNone = False
-		for name in targets:
+# Looks for the many channel/category names in existingList, creates then if they're missing, and returns results in a list with the same order.
+# Names can be a list, or a dictionary with default values. Filter function can be used as an additional filter.
+async def findOrCreateNamesAsync(names, existingList, createFunctionAsync, filterFunction = None, **createArgs):
+	if isinstance(names, list):
+		names = dict.fromkeys(names) # Converts the list names to a dict with all values None.
+	for name in names:
+		if not names[name] is None:
+			continue
+		for element in existingList:
 			if element.name.lower() == name.lower() and (filterFunction is None or filterFunction(element)):
-				targets[name] = element
-			if targets[name] is None:
-				anyNone = True
-		if not anyNone:
-			break
-	for name in targets:
-		if targets[name] is None:
-			targets[name] = await createFunctionAsync(name)
-	return targets.values() # Only returns the created objects.
+				names[name] = element
+				break
+		if names[name] is None:
+			names[name] = await createFunctionAsync(name, **createArgs)
+	return names.values() # Only returns the created objects.
 
 # Does the actual slash commands.
 
@@ -139,20 +155,54 @@ guild_ids = [732240720487776356]
 @slash.subcommand(
 	base = "tournament",
 	name = "create",
+	description = "Create a tournament people can join and create teams in.",
+	options = [{
+			"name": "existing-leader-role",
+			"description": "Use existing leader role instead of creating one. (doesn't have to be named \"Tournament Leader\")",
+			"type": 8,
+			"required": False
+		}, {
+			"name": "existing-category",
+			"description": "Use existing category instead of creating one. (doesn't have to be named \"Tournament\")",
+			"type": 7,
+			"channel_types": [4],
+			"required": False
+		}, {
+			"name": "existing-info-text",
+			"description": "Use existing text channel for info instead of creating one. (doesn't have to be named \"info\")",
+			"type": 7,
+			"channel_types": [0],
+			"required": False
+		}, {
+			"name": "existing-general-text",
+			"description": "Use existing text channel instead of creating one. (that doesn't have to be named \"general\")",
+			"type": 7,
+			"channel_types": [0],
+			"required": False
+		}, {
+			"name": "existing-general-voice",
+			"description": "Use existing voice channel instead of creating one. (that doesn't have to be named \"general\")",
+			"type": 7,
+			"channel_types": [2],
+			"required": False
+		}],
 	guild_ids = guild_ids
 )
-async def createTournamentCommand(context):
+async def createTournamentCommand(context, **kwargs):
 	guild, error = findGuildTournament(context.guild_id, "create a tournament", True)
 	if not error is None:
 		await context.send(error)
 		return
-	category = await findNameAsync("tournament", guild.categories, guild.create_category)
-	infoText, generalText = await findOrCreateNamesAsync(["info", "general"], category.text_channels, category.create_text_channel)
-	generalVoice = await findNameAsync("general", category.voice_channels, category.create_voice_channel)
+	role = await findOrCreateNameAsync("Tournament Leader", guild.roles, guild.create_role, kwargs.get("existing-leader-role"), colour = Color.dark_gray(), mentionable = True, reason = "Created tournament leader role to show who can use restricted commands in tournaments.")
+	if not role in context.author.roles:
+		await context.author.add_roles(role)
+	category = await findOrCreateNameAsync("Tournament", guild.categories, guild.create_category, kwargs.get("existing-category"))
+	infoText, generalText = await findOrCreateNamesAsync({"info": kwargs.get("existing-info-text"), "general": kwargs.get("existing-general-text")}, category.text_channels, category.create_text_channel)
+	generalVoice = await findOrCreateNameAsync("General", category.voice_channels, category.create_voice_channel, kwargs.get("existing-general-voice"))
 
 	global tournaments
-	tournaments[context.guild_id] = Tournament(guild.id, infoText.id, generalVoice.id)
-	await context.send("Successfully created a tournament.")
+	tournaments[context.guild_id] = Tournament(guild.id, role.id, category.id, infoText.id, generalText.id, generalVoice.id)
+	await context.send(f"Successfully created a tournament, using {infoText.mention} for info, and {generalText.mention} & {generalVoice.mention} for chat.\nYou now have the {role.mention} role.")
 
 @slash.subcommand(
 	base = "tournament",
@@ -180,17 +230,81 @@ async def tournamentDetailsCommand(context):
 		return
 	await context.send(str(tournaments[context.guild_id]))
 
+colorChoices = []
+for i, color in enumerate(colors):
+	colorChoices.append({"name": color, "value": i})
+
 @slash.subcommand(
 	base = "team",
 	name = "create",
+	description = "Create team with a new role and channels, or with an existing role/channels.",
+	options = [{
+			"name": "name",
+			"description": "The name of the team.",
+			"type": 3,
+			"required": True
+		}, {
+			"name": "color",
+			"description": "The color of the team",
+			"type": 4,
+			"choices": colorChoices,
+			"required": False
+		}, {
+			"name": "existing-team-role",
+			"description": "Use existing role instead of creating one. (doesn't have to be named same as team)",
+			"type": 8,
+			"required": False
+		}, {
+			"name": "existing-team-text",
+			"description": "Use existing text channel instead of creating one. (that doesn't have to be named same as team)",
+			"type": 7,
+			"channel_types": [0],
+			"required": False
+		}, {
+			"name": "existing-team-voice",
+			"description": "Use existing voice channel instead of creating one. (that doesn't have to be named same as team)",
+			"type": 7,
+			"channel_types": [2],
+			"required": False
+	}],
 	guild_ids = guild_ids
 )
-async def teamCreateCommand(context):
+async def teamCreateCommand(context, name, **kwargs):
 	guild, error = findGuildTournament(context.guild_id, "create a team")
 	if not error is None:
 		await context.send(error)
 		return
-	await context.send("Will do, later.")
+	global tournaments
+	tournament = tournaments[context.guild_id]
+	
+	if name in tournament.teams:
+		await context.send(f"Can't create team, the name *{name}* is already taken.")
+		return
+	category = get(guild.categories, id = tournament.categoryId)
+	print(tournament.leaderRoleId)
+	leaderRole = guild.get_role(tournament.leaderRoleId)
+	print(leaderRole)
+	if not leaderRole in context.author.roles:
+		await context.author.add_roles(leaderRole)
+	color = choice(list(colors.values()))
+	if "color" in kwargs:
+		color = list(colors.values())[kwargs["color"]]
+	role = await findOrCreateNameAsync(name, guild.roles, guild.create_role, kwargs.get("existing-team-role"), color = color, mentionable = True, reason = f"Added a role for organizing team \"{name}\".")
+	if not role in context.author.roles:
+		await context.author.add_roles(role)
+	textOverwrites = {
+		guild.default_role: PermissionOverwrite(read_messages = False, send_messages = False),
+		role: PermissionOverwrite(read_messages = True, send_messages = True)
+	}
+	teamText = await findOrCreateNameAsync(name, category.text_channels, category.create_text_channel, kwargs.get("existing-team-text"), overwrites = textOverwrites)
+	voiceOverwrites = {
+		guild.default_role: PermissionOverwrite(connect = False),
+		role: PermissionOverwrite(connect = True)
+	}
+	teamVoice = await findOrCreateNameAsync(name, category.voice_channels, category.create_voice_channel, kwargs.get("existing-team-voice"), overwrites = textOverwrites)
+	
+	tournament.teams[name] = Team(context.author.id, role.id, teamText.id, teamVoice.id)
+	await context.send(f"Successfully created the team *{name}*, with channels {teamText.mention} and {teamVoice.mention}.\nYou are now a tournament leader with the team role {role.mention}.")
 
 @slash.slash(
 	name = "join",
@@ -209,7 +323,7 @@ async def joinCommand(context):
 
 try:
 	client.run(TOKEN)
-except discord.errors.HTTPException as e:
+except errors.HTTPException as e:
 	print(f"Tried to run client but received \"{e}\" from discord:")
 	print(f"Response: {e.response}")
 #https://stackoverflow.com/questions/67268074/discord-py-429-rate-limit-what-does-not-making-requests-on-exhausted-buckets
