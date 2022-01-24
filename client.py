@@ -41,10 +41,24 @@ class Tournament():
 	
 	def __str__(self):
 		return f"Tournament with {len(self.lobby)} players in lobby and {len(self.teams)} teams:\n{self.teams}"
+	
+	def removePlayer(self, playerId): # Finds the player in the tournament lobby or a team, returns it and removes it.
+		for i, player in enumerate(self.lobby):
+			if player.id == playerId:
+				return self.lobby.pop(i), None
+		for name, team in self.teams.items():
+			if team.leader.id == playerId:
+				found = team.leader
+				team.leader = None
+				return found
+			for i, player in enumerate(team.players):
+				if player.id == playerId:
+					return team.pop(i), name
+		return None, None
 
 class Team():
-	def __init__(self, leaderId, roleId, textId, voiceId):
-		self.leaderId = leaderId
+	def __init__(self, leader, roleId, textId, voiceId):
+		self.leader = leader
 
 		self.roleId = roleId
 		textId = textId
@@ -245,7 +259,7 @@ for i, color in enumerate(colors):
 			"required": True
 		}, {
 			"name": "color",
-			"description": "The color of the team",
+			"description": "The color of the team.",
 			"type": 4,
 			"choices": colorChoices,
 			"required": False
@@ -253,6 +267,11 @@ for i, color in enumerate(colors):
 			"name": "existing-team-role",
 			"description": "Use existing role instead of creating one. (doesn't have to be named same as team)",
 			"type": 8,
+			"required": False
+		}, {
+			"name": "recruit-users-with-role",
+			"description": "When specifying an existing team role, this will add all users who already have it to the team.",
+			"type": 5,
 			"required": False
 		}, {
 			"name": "existing-team-text",
@@ -281,9 +300,8 @@ async def teamCreateCommand(context, name, **kwargs):
 		await context.send(f"Can't create team, the name *{name}* is already taken.")
 		return
 	category = get(guild.categories, id = tournament.categoryId)
-	print(tournament.leaderRoleId)
 	leaderRole = guild.get_role(tournament.leaderRoleId)
-	print(leaderRole)
+	
 	if not leaderRole in context.author.roles:
 		await context.author.add_roles(leaderRole)
 	color = choice(list(colors.values()))
@@ -294,19 +312,32 @@ async def teamCreateCommand(context, name, **kwargs):
 		await context.author.add_roles(role)
 	textOverwrites = {
 		guild.default_role: PermissionOverwrite(read_messages = False, send_messages = False),
-		role: PermissionOverwrite(read_messages = True, send_messages = True)
+		leaderRole: PermissionOverwrite(view_channel = True, send_messages = True),
+		role: PermissionOverwrite(view_channel = True, send_messages = True)
 	}
 	teamText = await findOrCreateNameAsync(name, category.text_channels, category.create_text_channel, kwargs.get("existing-team-text"), overwrites = textOverwrites)
 	voiceOverwrites = {
 		guild.default_role: PermissionOverwrite(connect = False),
+		leaderRole: PermissionOverwrite(connect = True),
 		role: PermissionOverwrite(connect = True)
 	}
-	teamVoice = await findOrCreateNameAsync(name, category.voice_channels, category.create_voice_channel, kwargs.get("existing-team-voice"), overwrites = textOverwrites)
+	teamVoice = await findOrCreateNameAsync(name, category.voice_channels, category.create_voice_channel, kwargs.get("existing-team-voice"), overwrites = voiceOverwrites)
 	
-	tournament.teams[name] = Team(context.author.id, role.id, teamText.id, teamVoice.id)
-	await context.send(f"Successfully created the team *{name}*, with channels {teamText.mention} and {teamVoice.mention}.\nYou are now a tournament leader with the team role {role.mention}.")
+	leader, previousTeam = tournament.removePlayer(context.author.id) # Removes player from other teams.
+	
+	if leader is None:
+		leader = Player(context.author.id)
+		removedMessage = ""
+	else:
+		if previousTeam is None:
+			removedMessage = "were removed from the tournament lobby and "
+		else:
+			message = f"were removed from *{previousTeam}* and "
+	tournament.teams[name] = Team(leader, role.id, teamText.id, teamVoice.id)
+	await context.send(f"Successfully created the team *{name}*, with channels {teamText.mention} and {teamVoice.mention}.\nYou {removedMessage}are now a tournament leader with the team role {role.mention}.")
 
-@slash.slash(
+@slash.subcommand(
+	base = "tournament",
 	name = "join",
 	guild_ids = guild_ids
 )
