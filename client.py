@@ -64,7 +64,7 @@ class Team():
 		textId = textId
 		voiceId = voiceId
 
-		self.players = []
+		self.players = [] # TODO: Only use role ID.
 	
 	def __str__(self):
 		return f"Team containing {len(self.players)} players."
@@ -167,8 +167,8 @@ slash = SlashCommand(client, sync_commands = True)
 guild_ids = [732240720487776356]
 
 @slash.subcommand(
-	base = "tournament",
-	name = "create",
+	base = "create",
+	name = "tournament",
 	description = "Create a tournament people can join and create teams in.",
 	options = [{
 			"name": "existing-leader-role",
@@ -219,8 +219,8 @@ async def createTournamentCommand(context, **kwargs):
 	await context.send(f"Successfully created a tournament, using {infoText.mention} for info, and {generalText.mention} & {generalVoice.mention} for chat.\nYou now have the {role.mention} role.")
 
 @slash.subcommand(
-	base = "tournament",
-	name = "delete",
+	base = "delete",
+	name = "tournament",
 	guild_ids = guild_ids
 )
 async def deleteTournamentCommand(context):
@@ -233,11 +233,11 @@ async def deleteTournamentCommand(context):
 	await context.send("Successfully deleted tournament.")
 
 @slash.subcommand(
-	base = "tournament",
-	name = "show",
+	base = "show",
+	name = "tournament",
 	guild_ids = guild_ids
 )
-async def tournamentDetailsCommand(context):
+async def showTournamentCommand(context):
 	error = findGuildTournament(context.guild_id, "see the ongoing tournament")[1]
 	if not error is None:
 		await context.send(error)
@@ -249,8 +249,8 @@ for i, color in enumerate(colors):
 	colorChoices.append({"name": color, "value": i})
 
 @slash.subcommand(
-	base = "team",
-	name = "create",
+	base = "create",
+	name = "team",
 	description = "Create team with a new role and channels, or with an existing role/channels.",
 	options = [{
 			"name": "name",
@@ -288,7 +288,7 @@ for i, color in enumerate(colors):
 	}],
 	guild_ids = guild_ids
 )
-async def teamCreateCommand(context, name, **kwargs):
+async def createTeamCommand(context, name, **kwargs):
 	guild, error = findGuildTournament(context.guild_id, "create a team")
 	if not error is None:
 		await context.send(error)
@@ -336,9 +336,9 @@ async def teamCreateCommand(context, name, **kwargs):
 	tournament.teams[name] = Team(leader, role.id, teamText.id, teamVoice.id)
 	await context.send(f"Successfully created the team *{name}*, with channels {teamText.mention} and {teamVoice.mention}.\nYou {removedMessage}are now a tournament leader with the team role {role.mention}.")
 
-@slash.subcommand(
-	base = "tournament",
+@slash.slash(
 	name = "join",
+	description = "Join the tournament.",
 	guild_ids = guild_ids
 )
 async def joinCommand(context):
